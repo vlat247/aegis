@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "aegis-firewall": [
+        "packages/aegis-firewall/src/index.ts"
+      ]
+    },
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  }
+}

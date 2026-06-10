@@ -12,6 +12,7 @@ export class AegisScanner {
     const findings: AegisFinding[] = [];
 
     for (const rule of this.rules) {
+      rule.pattern.lastIndex = 0;
       const match = rule.pattern.exec(input);
 
       if (!match) {
@@ -19,10 +20,12 @@ export class AegisScanner {
       }
 
       findings.push({
+        rule,
         ruleId: rule.id,
+        category: rule.category,
         description: rule.description,
         severity: rule.severity,
-        score: rule.score,
+        recommendation: rule.recommendation,
         match: match[0],
         index: match.index
       });

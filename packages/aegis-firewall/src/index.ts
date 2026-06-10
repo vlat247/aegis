@@ -5,14 +5,15 @@ import { defaultRules } from "./rules.js";
 import type {
   AegisFirewallOptions,
   AegisMode,
-  AegisRule,
   AegisScanResult,
   FirewallAction,
+  OpenAICompatibleClient,
   RetrievedContext,
   RiskLevel,
   ScanRequest,
   ToolDefinition
 } from "./types.js";
+import { wrapOpenAIClient, type AegisOpenAIWrapperOptions } from "./openai-wrapper.js";
 
 export class AegisFirewallBlockedError extends Error {
   readonly result: AegisScanResult;
@@ -118,6 +119,13 @@ export class AegisFirewall {
   shouldBlock(result: AegisScanResult): boolean {
     return result.action === "block" || result.blocked;
   }
+
+  wrapOpenAI<TClient extends OpenAICompatibleClient>(
+    client: TClient,
+    options: Omit<AegisOpenAIWrapperOptions, "firewall"> = {}
+  ): TClient {
+    return wrapOpenAIClient(client, { ...options, firewall: this });
+  }
 }
 
 function getRiskLevel(riskScore: number): RiskLevel {
@@ -188,7 +196,7 @@ export { AegisScanner } from "./scanner.js";
 export { AegisScorer } from "./scorer.js";
 export { AegisSanitizer } from "./sanitizer.js";
 export { defaultRules } from "./rules.js";
-export { wrapOpenAIClient } from "./openai-wrapper.js";
+export { wrapOpenAIClient, wrapOpenAI } from "./openai-wrapper.js";
 export type {
   AegisFinding,
   AegisFirewallOptions,

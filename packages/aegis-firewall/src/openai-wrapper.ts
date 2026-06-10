@@ -1,9 +1,10 @@
 import type {
   AegisScanResult,
   OpenAIChatCompletionParams,
+  OpenAIChatMessage,
   OpenAICompatibleClient
 } from "./types.js";
-import { AegisFirewall } from "./index.js";
+import { AegisFirewall, AegisFirewallBlockedError } from "./index.js";
 
 export interface AegisOpenAIWrapperOptions {
   firewall?: AegisFirewall;
@@ -25,17 +26,79 @@ export function wrapOpenAIClient<TClient extends OpenAICompatibleClient>(
             ? {
                 ...client.chat.completions,
                 create: async (params: OpenAIChatCompletionParams) => {
-                  const checked = firewall.scan(extractText(params));
+                  const scanResults: AegisScanResult[] = [];
+                  const messages = params.messages ?? [];
+                  const newMessages: OpenAIChatMessage[] = [];
 
-                  if (!checked.allowed) {
-                    options.onBlocked?.(checked);
-                    throw new Error("AegisFirewall blocked this OpenAI request.");
+                  for (const msg of messages) {
+                    if (msg.role === "user") {
+                      if (typeof msg.content === "string") {
+                        const scanResult = firewall.scan(msg.content);
+                        scanResults.push(scanResult);
+                        if (!scanResult.allowed || firewall.shouldBlock(scanResult)) {
+                          options.onBlocked?.(scanResult);
+                          throw new AegisFirewallBlockedError(scanResult);
+                        }
+                        newMessages.push({
+                          ...msg,
+                          content: scanResult.safePrompt
+                        });
+                      } else if (Array.isArray(msg.content)) {
+                        const newContentParts: any[] = [];
+                        for (const part of msg.content) {
+                          if (
+                            part &&
+                            typeof part === "object" &&
+                            "text" in part &&
+                            typeof part.text === "string"
+                          ) {
+                            const scanResult = firewall.scan(part.text);
+                            scanResults.push(scanResult);
+                            if (!scanResult.allowed || firewall.shouldBlock(scanResult)) {
+                              options.onBlocked?.(scanResult);
+                              throw new AegisFirewallBlockedError(scanResult);
+                            }
+                            newContentParts.push({
+                              ...part,
+                              text: scanResult.safePrompt
+                            });
+                          } else {
+                            newContentParts.push(part);
+                          }
+                        }
+                        newMessages.push({
+                          ...msg,
+                          content: newContentParts
+                        });
+                      } else {
+                        newMessages.push(msg);
+                      }
+                    } else {
+                      newMessages.push(msg);
+                    }
                   }
 
-                  return client.chat?.completions?.create({
+                  const response = await client.chat!.completions!.create({
                     ...params,
-                    messages: rewriteMessages(params, checked.output)
+                    messages: newMessages
                   });
+
+                  if (response && typeof response === "object") {
+                    Object.defineProperty(response, "aegis", {
+                      value: {
+                        scanResults,
+                        allowed: true,
+                        blocked: false,
+                        findings: scanResults.flatMap((r) => r.findings),
+                        riskScore: scanResults.length > 0 ? Math.max(...scanResults.map((r) => r.riskScore)) : 0
+                      },
+                      writable: true,
+                      configurable: true,
+                      enumerable: true
+                    });
+                  }
+
+                  return response;
                 }
               }
             : client.chat.completions
@@ -45,65 +108,60 @@ export function wrapOpenAIClient<TClient extends OpenAICompatibleClient>(
       ? {
           ...client.responses,
           create: async (params: OpenAIChatCompletionParams) => {
-            const checked = firewall.scan(extractText(params));
+            const scanResults: AegisScanResult[] = [];
+            let newInput: typeof params.input = params.input;
 
-            if (!checked.allowed) {
-              options.onBlocked?.(checked);
-              throw new Error("AegisFirewall blocked this OpenAI request.");
+            if (typeof params.input === "string") {
+              const scanResult = firewall.scan(params.input);
+              scanResults.push(scanResult);
+              if (!scanResult.allowed || firewall.shouldBlock(scanResult)) {
+                options.onBlocked?.(scanResult);
+                throw new AegisFirewallBlockedError(scanResult);
+              }
+              newInput = scanResult.safePrompt;
+            } else if (Array.isArray(params.input)) {
+              const updatedInput: unknown[] = [];
+              for (const item of params.input) {
+                if (typeof item === "string") {
+                  const scanResult = firewall.scan(item);
+                  scanResults.push(scanResult);
+                  if (!scanResult.allowed || firewall.shouldBlock(scanResult)) {
+                    options.onBlocked?.(scanResult);
+                    throw new AegisFirewallBlockedError(scanResult);
+                  }
+                  updatedInput.push(scanResult.safePrompt);
+                } else {
+                  updatedInput.push(item);
+                }
+              }
+              newInput = updatedInput;
             }
 
-            return client.responses?.create({
+            const response = await client.responses!.create({
               ...params,
-              input: typeof params.input === "string" ? checked.output : params.input
+              input: newInput
             });
+
+            if (response && typeof response === "object") {
+              Object.defineProperty(response, "aegis", {
+                value: {
+                  scanResults,
+                  allowed: true,
+                  blocked: false,
+                  findings: scanResults.flatMap((r) => r.findings),
+                  riskScore: scanResults.length > 0 ? Math.max(...scanResults.map((r) => r.riskScore)) : 0
+                },
+                writable: true,
+                configurable: true,
+                enumerable: true
+              });
+            }
+
+            return response;
           }
         }
       : client.responses
   } as TClient;
 }
 
-function extractText(params: OpenAIChatCompletionParams): string {
-  if (typeof params.input === "string") {
-    return params.input;
-  }
-
-  return (params.messages ?? [])
-    .map((message) => {
-      if (typeof message.content === "string") {
-        return message.content;
-      }
-
-      if (Array.isArray(message.content)) {
-        return message.content.map((part) => part.text ?? "").join("\n");
-      }
-
-      return "";
-    })
-    .join("\n");
-}
-
-function rewriteMessages(
-  params: OpenAIChatCompletionParams,
-  sanitizedText: string
-): OpenAIChatCompletionParams["messages"] {
-  if (!params.messages?.length) {
-    return params.messages;
-  }
-
-  let lastTextIndex = -1;
-
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    if (typeof params.messages[index]?.content === "string") {
-      lastTextIndex = index;
-      break;
-    }
-  }
-
-  if (lastTextIndex === -1) {
-    return params.messages;
-  }
-
-  return params.messages.map((message, index) =>
-    index === lastTextIndex ? { ...message, content: sanitizedText } : message
-  );
-}
+export { wrapOpenAIClient as wrapOpenAI };

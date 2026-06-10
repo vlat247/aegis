@@ -18,10 +18,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src/",
+    "lint": "eslint ."
   },
   "devDependencies": {
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.8"
   },
   "keywords": [
     "llm",
